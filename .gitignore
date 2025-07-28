@@ -1,1 +1,22 @@
+# Secrets & Credentials
+.env
+student_credentials
 ssh_keys/
+../ssh_keys_backup/
+
+# Python cache
+__pycache__/
+
+# Node & Foundry Dependencies
+node_modules/
+lib/
+
+# Build Artifacts & Logs
+out/
+cache/
+broadcast/
+*.log
+
+# OS / IDE specific
+.DS_Store
+.codio
