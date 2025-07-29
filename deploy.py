@@ -1,56 +1,74 @@
-import os
 import json
 from web3 import Web3
-from eth_account import Account
+from solcx import compile_standard, install_solc
 
-def connect_to(chain):
-    urls = {
-        "avax": "https://api.avax-test.network/ext/bc/C/rpc",
-        "bsc": "https://data-seed-prebsc-1-s1.binance.org:8545"
-    }
-    return Web3(Web3.HTTPProvider(urls[chain]))
+# Set your private key here (testnet only!)
+PRIVATE_KEY = "0x62fa8b75288b4bfcddafcf568cafe86850e74a693cbdeb940c178fb52a5f29fe"
+ACCOUNT_ADDRESS = Web3.to_checksum_address(Web3().eth.account.from_key(PRIVATE_KEY).address)
 
-def load_compiled_contract(path):
-    with open(path) as f:
-        contract_json = json.load(f)
-        return contract_json['abi'], contract_json['bytecode']
+# File paths
+SOURCE_PATH = "Bridge/src/Source.sol"
+DEST_PATH = "Bridge/src/Destination.sol"
 
-def deploy_contract(chain, abi, bytecode):
-    w3 = connect_to(chain)
-    acct = Account.from_key(os.getenv("WARDEN_PRIVATE_KEY"))
+def compile_contract(path, contract_name):
+    with open(path, 'r') as f:
+        source_code = f.read()
 
+    install_solc("0.8.20")
+
+    compiled = compile_standard({
+        "language": "Solidity",
+        "sources": {
+            path: {"content": source_code}
+        },
+        "settings": {
+            "outputSelection": {
+                "*": {
+                    "*": ["abi", "evm.bytecode.object"]
+                }
+            },
+            "remappings": [
+                "@openzeppelin/=./openzeppelin/"
+            ]
+        }
+    }, solc_version="0.8.20", base_path="./")
+
+    contract = compiled['contracts'][path][contract_name]
+    return contract['abi'], contract['evm']['bytecode']['object']
+
+def deploy_contract(w3, abi, bytecode):
     contract = w3.eth.contract(abi=abi, bytecode=bytecode)
-    tx = contract.constructor(acct.address).build_transaction({
-        'from': acct.address,
-        'nonce': w3.eth.get_transaction_count(acct.address),
-        'gas': 3000000,
+    nonce = w3.eth.get_transaction_count(ACCOUNT_ADDRESS)
+    
+    tx = contract.constructor(ACCOUNT_ADDRESS).build_transaction({
+        'from': ACCOUNT_ADDRESS,
+        'nonce': nonce,
         'gasPrice': w3.eth.gas_price,
-        'chainId': w3.eth.chain_id
+        'gas': 5000000
     })
-
-    signed_tx = acct.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed_tx.rawTransaction)
+    
+    signed = w3.eth.account.sign_transaction(tx, PRIVATE_KEY)
+    tx_hash = w3.eth.send_raw_transaction(signed.rawTransaction)
     receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-
-    print(f"{chain} contract deployed at: {receipt.contractAddress}")
+    
     return receipt.contractAddress
 
 if __name__ == "__main__":
-    source_abi, source_bytecode = load_compiled_contract("out/Source.json")
-    dest_abi, dest_bytecode = load_compiled_contract("out/Destination.json")
+    print("🛠️ Compiling and deploying Source.sol...")
+    src_abi, src_bytecode = compile_contract(SOURCE_PATH, "Source")
+    w3_source = Web3(Web3.HTTPProvider("https://api.avax-test.network/ext/bc/C/rpc"))
+    src_address = deploy_contract(w3_source, src_abi, src_bytecode)
+    print(f"✅ Source contract deployed at: {src_address}")
 
-    source_address = deploy_contract("avax", source_abi, source_bytecode)
-    dest_address = deploy_contract("bsc", dest_abi, dest_bytecode)
+    print("🛠️ Compiling and deploying Destination.sol...")
+    dst_abi, dst_bytecode = compile_contract(DEST_PATH, "Destination")
+    w3_dest = Web3(Web3.HTTPProvider("https://data-seed-prebsc-1-s1.binance.org:8545/"))
+    dst_address = deploy_contract(w3_dest, dst_abi, dst_bytecode)
+    print(f"✅ Destination contract deployed at: {dst_address}")
 
-    # Save updated contract_info.json
-    with open("contract_info.json", "r") as f:
-        data = json.load(f)
-
-    data["source"]["address"] = source_address
-    data["destination"]["address"] = dest_address
-
+    # Save info
     with open("contract_info.json", "w") as f:
-        json.dump(data, f, indent=2)
-
-    print("✅ contract_info.json updated.")
-    
+        json.dump({
+            "source": {"address": src_address, "abi": src_abi},
+            "destination": {"address": dst_address, "abi": dst_abi}
+        }, f, indent=2)
