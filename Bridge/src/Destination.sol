@@ -1,60 +1,37 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.17;
 
-import "openzeppelin/access/AccessControl.sol";
-import "openzeppelin/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/ERC20.sol";
+import "@openzeppelin/contracts/token/ERC20/extensions/ERC20Burnable.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 
-import "./BridgeToken.sol";
+contract BridgeToken is ERC20, ERC20Burnable, AccessControl {
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+	address public underlying;
 
-contract Destination is AccessControl {
-    bytes32 public constant WARDEN_ROLE = keccak256("BRIDGE_WARDEN_ROLE");
-    bytes32 public constant CREATOR_ROLE = keccak256("CREATOR_ROLE");
-	mapping( address => address) public underlying_tokens;
-	mapping( address => address) public wrapped_tokens;
-	address[] public tokens;
-
-	event Creation( address indexed underlying_token, address indexed wrapped_token );
-	event Wrap( address indexed underlying_token, address indexed wrapped_token, address indexed to, uint256 amount );
-	event Unwrap( address indexed underlying_token, address indexed wrapped_token, address frm, address indexed to, uint256 amount );
-
-    constructor( address admin ) {
+    constructor( address _underlying, string memory name, string memory symbol, address admin ) ERC20(name,symbol) {
+		underlying = _underlying;
         _grantRole(DEFAULT_ADMIN_ROLE, admin);
-        _grantRole(CREATOR_ROLE, admin);
-        _grantRole(WARDEN_ROLE, admin);
+        _grantRole(MINTER_ROLE, admin);
     }
 
-	function wrap(address _underlying_token, address _recipient, uint256 _amount ) public onlyRole(WARDEN_ROLE) {
-		//YOUR CODE HERE
-    address wrapped = wrapped_tokens[_underlying_token];
-    require(wrapped != address(0), "Token not registered");
+    function mint(address to, uint256 amount) public onlyRole(MINTER_ROLE) {
+        _mint(to, amount);
+    }
 
-    BridgeToken(wrapped).mint(_recipient, _amount);
-    emit Wrap(_underlying_token, wrapped, _recipient, _amount);
-	}
+    function clawBack(address account, uint256 amount) public onlyRole(MINTER_ROLE) {
+        _burn(account, amount);
+    }
 
-	function unwrap(address _wrapped_token, address _recipient, uint256 _amount ) public {
-		//YOUR CODE HERE
-    address underlying = underlying_tokens[_wrapped_token];
-    require(underlying != address(0), "Wrapped token not registered");
-
-    BridgeToken(_wrapped_token).burnFrom(msg.sender, _amount);
-    emit Unwrap(underlying, _wrapped_token, msg.sender, _recipient, _amount);
-    
-	}
-
-	function createToken(address _underlying_token, string memory name, string memory symbol ) public onlyRole(CREATOR_ROLE) returns(address) {
-		//YOUR CODE HERE
-    require(wrapped_tokens[_underlying_token] == address(0), "Already created");
-
-    BridgeToken new_token = new BridgeToken(name, symbol);
-    wrapped_tokens[_underlying_token] = address(new_token);
-    underlying_tokens[address(new_token)] = _underlying_token;
-    tokens.push(address(new_token));
-
-    emit Creation(_underlying_token, address(new_token));
-    return address(new_token);
-	}
-
+    function burnFrom(address account, uint256 amount) public override {
+		/*
+		   Override OpenZeppelin's burnFrom function to allow the MINTER_ROLE to burn without an allowance
+		*/
+		if( ! hasRole(MINTER_ROLE,msg.sender) ) {
+			_spendAllowance(account, _msgSender(), amount);
+		}
+        _burn(account, amount);
+    }
 }
 
 
